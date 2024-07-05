@@ -6,19 +6,18 @@ import json
 import hmac
 import hashlib
 import logging
+
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "Webhook receiver is running!"
-
-DROPBOX_APP_SECRET = os.environ.get('dropbox_app_token')
+DROPBOX_APP_SECRET = os.environ.get('dropbox_app_secret')
+DROPBOX_TOKEN = os.environ.get('dropbox_token')
 
 def verify_webhook_request(request):
-    if DROPBOX_APP_SECRET is None:
-        raise ValueError("DROPBOX_APP_SECRET environment variable is not set")
+    if not DROPBOX_APP_SECRET:
+        app.logger.error("DROPBOX_APP_SECRET environment variable is not set")
+        return False
 
     signature = request.headers.get('X-Dropbox-Signature')
     if not signature:
@@ -26,39 +25,45 @@ def verify_webhook_request(request):
 
     body = request.data
 
-    # Compute the HMAC-SHA256 using the app secret
     computed_signature = hmac.new(
         DROPBOX_APP_SECRET.encode('utf-8'),
         body,
         hashlib.sha256
     ).hexdigest()
 
-    # Compare the computed signature with the one provided in the request
     return hmac.compare_digest(computed_signature, signature)
+
+@app.route('/')
+def home():
+    return "Webhook receiver is running!"
+
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     if request.method == 'GET':
-        logging.debug(f"Received GET request. Args: {request.args}")
-        # Handle the webhook verification challenge
+        app.logger.info(f'Received GET request. Args: {request.args}')
         challenge = request.args.get('challenge')
         if challenge:
-            logging.debug(f"Challenge received: {challenge}")
+            app.logger.info(f"Challenge received: {challenge}")
             response = make_response(challenge)
             response.headers['Content-Type'] = 'text/plain'
-            logging.debug(f"Sending response: {response.get_data(as_text=True)}")
-        logging.warning("No challenge received")
+            app.logger.info(f"Sending response: {response.get_data(as_text=True)}")
+            return response
+        app.logger.warning("No challenge received")
         return "No challenge received", 400
 
     elif request.method == 'POST':
-        logging.debug("Received POST request")
-        request_json = request.json  # Get JSON data from the request
+        app.logger.info("Received POST request")
+        if not verify_webhook_request(request):
+            app.logger.warning("Invalid webhook signature")
+            return jsonify({"status": "error", "message": "Invalid request signature"}), 403
+
+        request_json = request.json
         if 'list_folder' in request_json and 'entries' in request_json['list_folder']:
             for entry in request_json['list_folder']['entries']:
                 if entry['.tag'] == 'file':
                     file_path = entry['path_lower']
-                    dropbox_token = os.environ.get('DROPBOX_TOKEN')
                     headers = {
-                        "Authorization": f"Bearer {dropbox_token}",
+                        "Authorization": f"Bearer {DROPBOX_TOKEN}",
                         "Dropbox-API-Arg": json.dumps({"path": file_path})
                     }
                     download_url = "https://content.dropboxapi.com/2/files/download"
@@ -71,11 +76,11 @@ def webhook():
                         
                         qa_result = dropbox_qa(local_file_path)
                         
-                        # Clean up: delete the temporary file
                         os.remove(local_file_path)
                         
                         return jsonify({"status": "success", "qa_result": qa_result}), 200
                     else:
+                        app.logger.error(f"Failed to download file: {response.status_code}")
                         return jsonify({"status": "error", "message": "Failed to download file"}), 400
     
         return jsonify({"status": "error", "message": "No file path provided"}), 400
@@ -101,4 +106,5 @@ def dropbox_qa(pdf):
     return f'{count} instances of magenta lines with vector paths'
 
 if __name__ == '__main__':
-    app.run(debug=True, port=int(os.getenv("PORT", default=5000)))
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
