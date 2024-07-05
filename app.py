@@ -52,7 +52,7 @@ def webhook():
         return "No challenge received", 400
 
     elif request.method == 'POST':
-        app.logger.info("Received POST request")
+        app.logger.info("Received POST request. Args: {request.args}")
         if not verify_webhook_request(request):
             app.logger.warning("Invalid webhook signature")
             return jsonify({"status": "error", "message": "Invalid request signature"}), 403
