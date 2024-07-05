@@ -5,7 +5,7 @@ import fitz  # PyMuPDF
 import json
 import hmac
 import hashlib
-
+import logging
 app = Flask(__name__)
 
 @app.route('/')
@@ -13,7 +13,7 @@ def home():
     return "Webhook receiver is running!"
 
 DROPBOX_APP_SECRET = os.environ.get('dropbox_app_token')
-
+logging.basicConfig(level=logging.DEBUG)
 def verify_webhook_request(request):
     if DROPBOX_APP_SECRET is None:
         raise ValueError("DROPBOX_APP_SECRET environment variable is not set")
@@ -36,12 +36,19 @@ def verify_webhook_request(request):
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     if request.method == 'GET':
+        logging.debug(f"Received GET request. Args: {request.args}")
         # Handle the webhook verification challenge
         challenge = request.args.get('challenge')
         if challenge:
-            return Response(challenge, mimetype='text/plain')
+            logging.debug(f"Challenge received: {challenge}")
+            response = make_response(challenge)
+            response.headers['Content-Type'] = 'text/plain'
+            logging.debug(f"Sending response: {response.get_data(as_text=True)}")
+        logging.warning("No challenge received")
         return "No challenge received", 400
+
     elif request.method == 'POST':
+        logging.debug("Received POST request")
         request_json = request.json  # Get JSON data from the request
         if 'list_folder' in request_json and 'entries' in request_json['list_folder']:
             for entry in request_json['list_folder']['entries']:
