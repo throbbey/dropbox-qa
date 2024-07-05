@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 import os
 import requests
 import fitz  # PyMuPDF
@@ -6,6 +6,8 @@ import json
 import hmac
 import hashlib
 import logging
+logging.basicConfig(level=logging.INFO)
+
 app = Flask(__name__)
 
 @app.route('/')
@@ -13,7 +15,7 @@ def home():
     return "Webhook receiver is running!"
 
 DROPBOX_APP_SECRET = os.environ.get('dropbox_app_token')
-logging.basicConfig(level=logging.DEBUG)
+
 def verify_webhook_request(request):
     if DROPBOX_APP_SECRET is None:
         raise ValueError("DROPBOX_APP_SECRET environment variable is not set")
