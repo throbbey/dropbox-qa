@@ -39,7 +39,7 @@ def webhook():
         # Handle the webhook verification challenge
         challenge = request.args.get('challenge')
         if challenge:
-            return Response(challenge, mimetype='text/plain)
+            return Response(challenge, mimetype='text/plain')
         return "No challenge received", 400
     elif request.method == 'POST':
         request_json = request.json  # Get JSON data from the request
