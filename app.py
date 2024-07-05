@@ -42,11 +42,6 @@ def verify_webhook_request(request):
 
     return hmac.compare_digest(computed_signature, signature)
 
-@app.route('/')
-def home():
-    logger.info("Home route accessed")
-    return "Webhook receiver is running!"
-
 def get_latest_cursor():
     headers = {
         "Authorization": f"Bearer {DROPBOX_TOKEN}",
@@ -84,10 +79,24 @@ def list_folder_continue(cursor):
         logger.error(f"Failed to list folder: {response.status_code}")
         return None
 
+@app.route('/')
+def home():
+    logger.info("Home route accessed")
+    return "Webhook receiver is running!"
+
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     if request.method == 'GET':
-        # ... (challenge response code, unchanged) ...
+        logger.info(f'Received GET request. Args: {request.args}')
+        challenge = request.args.get('challenge')
+        if challenge:
+            logger.info(f"Challenge received: {challenge}")
+            response = make_response(challenge)
+            response.headers['Content-Type'] = 'text/plain'
+            logger.info(f"Sending response: {response.get_data(as_text=True)}")
+            return response
+        logger.warning("No challenge received")
+        return "No challenge received", 400
 
     elif request.method == 'POST':
         logger.info(f"Received POST request. Headers: {request.headers}")
