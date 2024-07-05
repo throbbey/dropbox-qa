@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 
-DROPBOX_APP_SECRET = os.environ.get('dropbox_app_secret')
+DROPBOX_APP_SECRET = os.environ.get('dropbox_app_token')
 DROPBOX_TOKEN = os.environ.get('dropbox_token')
 
 def verify_webhook_request(request):
