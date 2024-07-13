@@ -4,6 +4,19 @@ import json
 from datetime import datetime
 import fitz  # PyMuPDF
 from flask import Flask, jsonify
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
+logger = logging.getLogger(__name__)
+
+def log_print(message):
+    print(message, flush=True)
+    logger.info(message)
 
 APP_KEY = os.getenv('APP_KEY')
 APP_SECRET = os.getenv('APP_SECRET')
@@ -115,32 +128,77 @@ def process_qa(dbx, entry):
 @app.route('/')
 def home():
     return "Dropbox QA Service is running."
-
-@app.route('/run-qa')
-def run_qa():
+    
+def run_qa_process():
+    log_print("Starting QA process...")
     try:
         dbx = get_dropbox_client()
         cut_files = list_recent_uploads(dbx)
         
         if not cut_files:
-            return jsonify({"message": "No files to process."}), 200
+            log_print("No files to process.")
+            return {"message": "No files to process."}
         
         results = []
         for entry in cut_files:
             status, qa_result = process_qa(dbx, entry)
-            results.append({
-                "filename": entry.name,
-                "status": status,
-                "result": qa_result
-            })
+            if status is not None and qa_result is not None:
+                results.append({
+                    "filename": entry.name,
+                    "status": status,
+                    "result": qa_result
+                })
         
-        return jsonify({
-            "message": "QA process completed for all CUT files.",
+        log_print(f"QA process completed for {len(results)} out of {len(cut_files)} CUT files.")
+        return {
+            "message": f"QA process completed for {len(results)} out of {len(cut_files)} CUT files.",
             "results": results
-        }), 200
+        }
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        error_msg = f"An error occurred during QA process: {e}"
+        log_print(error_msg)
+        return {"error": error_msg}
+
+@app.route('/run-qa')
+def run_qa():
+    result = run_qa_process()
+    return jsonify(result)
+    
+@app.route('/webhook', methods=['GET', 'POST'])
+def webhook():
+    log_print(f"Webhook accessed with method: {request.method}")
+    log_print(f"Request args: {request.args}")
+    if request.method == 'GET':
+        challenge = request.args.get('challenge', '')
+        log_print(f"Responding to challenge: {challenge}")
+        return challenge
+    elif request.method == 'POST':
+        log_print("Received webhook notification")
+        log_print(f"Request data: {request.data}")
+        # Trigger QA process in a separate thread
+        Thread(target=run_qa_process).start()
+        return jsonify(success=True)
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    try:
+        log_print("Starting application...")
+        port = int(os.environ.get("PORT", 8080))
+        log_print(f"Using port: {port}")
+        
+        # Check if we can connect to Dropbox
+        try:
+            dbx = get_dropbox_client()
+            dbx.users_get_current_account()
+            log_print("Successfully connected to Dropbox")
+        except Exception as e:
+            log_print(f"Error connecting to Dropbox: {e}")
+        
+        log_print("Initializing Flask app...")
+        app.run(host='0.0.0.0', port=port)
+    except Exception as e:
+        error_msg = f"Error starting the application: {e}\n{traceback.format_exc()}"
+        log_print(error_msg)
+        # Write to a file as a last resort
+        with open('startup_error.log', 'w') as f:
+            f.write(error_msg)
+        sys.exit(1)
