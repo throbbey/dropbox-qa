@@ -1,8 +1,9 @@
 import os
 import dropbox
+import json
 from datetime import datetime
 import fitz  # PyMuPDF
-
+from flask import Flask, jsonify
 
 APP_KEY = os.getenv('APP_KEY')
 APP_SECRET = os.getenv('APP_SECRET')
@@ -11,6 +12,8 @@ DOWNLOAD_FOLDER = 'downloads'
 
 if not DROPBOX_ACCESS_TOKEN:
     raise ValueError("DROPBOX_ACCESS_TOKEN must be set in .env file or environment variables")
+
+app = Flask(__name__)
 
 def get_dropbox_client():
     return dropbox.Dropbox(DROPBOX_ACCESS_TOKEN)
@@ -25,13 +28,6 @@ def list_recent_uploads(dbx):
         and "CUT" in entry.name.upper() 
         and entry.name.lower().endswith('.pdf')
     ]
-    
-    if cut_pdf_files:
-        print("PDF files containing 'CUT' found:")
-        for i, entry in enumerate(cut_pdf_files, 1):
-            print(f"{i}. {entry.name}: last modified on {entry.server_modified}")
-    else:
-        print("No PDF files containing 'CUT' found in recent uploads.")
     
     return cut_pdf_files
 
@@ -114,23 +110,37 @@ def process_qa(dbx, entry):
     print(f"QA Result for {entry.name}: {status} - {qa_result}")
     
     upload_qa_result(dbx, local_path, qa_result, status)
+    return status, qa_result
 
+@app.route('/')
+def home():
+    return "Dropbox QA Service is running."
 
-def main():
+@app.route('/run-qa')
+def run_qa():
     try:
         dbx = get_dropbox_client()
         cut_files = list_recent_uploads(dbx)
         
         if not cut_files:
-            print("No files to process.")
-            return
+            return jsonify({"message": "No files to process."}), 200
         
+        results = []
         for entry in cut_files:
-            process_qa(dbx, entry)
+            status, qa_result = process_qa(dbx, entry)
+            results.append({
+                "filename": entry.name,
+                "status": status,
+                "result": qa_result
+            })
         
-        print("QA process completed for all CUT files.")
+        return jsonify({
+            "message": "QA process completed for all CUT files.",
+            "results": results
+        }), 200
     except Exception as e:
-        print(f"An error occurred: {e}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    main()
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
