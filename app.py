@@ -122,7 +122,7 @@ def process_qa(dbx, entry):
     document.close()
 
     qa_result = f'{count} instances of magenta lines with vector paths'
-    status = "PASS" if count == 0 else "FAIL"
+    status = "FAIL" if count == 0 else "PASS"
     print(f"QA Result for {entry.name}: {status} - {qa_result}")
     
     upload_qa_result(dbx, local_path, qa_result, status)
