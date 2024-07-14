@@ -64,7 +64,7 @@ def download_file(dbx, entry):
 
 def upload_qa_result(dbx, file_path, qa_result, status):
     file_name = os.path.basename(file_path)
-    qa_file_name = f"{file_name}_qa_result.txt"
+    qa_file_name = f"{status}{file_name}_qa_result.txt"
     qa_file_path = os.path.join(DOWNLOAD_FOLDER, qa_file_name)
     
     # Create QA result file
