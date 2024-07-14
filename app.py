@@ -1,11 +1,13 @@
 import os
 import sys
+import traceback
 import dropbox
 import json
 from datetime import datetime
 import fitz  # PyMuPDF
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import logging
+from threading import Thread
 
 logging.basicConfig(
     level=logging.INFO,
