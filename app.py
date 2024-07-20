@@ -1,75 +1,91 @@
 import os
-from dropbox import Dropbox
-from dropbox import DropboxOAuth2FlowNoRedirect
-from datetime import datetime, timedelta
-import requests
-from threading import Lock
+import sys
+import traceback
+from flask import Flask, jsonify, request
+import logging
+from threading import Thread
 
-class DropboxTokenManager:
-    def __init__(self):
-        self.app_key = os.getenv('DROPBOX_APP_KEY')
-        self.app_secret = os.getenv('DROPBOX_APP_SECRET')
-        self.refresh_token = os.getenv('DROPBOX_REFRESH_TOKEN')
-        self.access_token = None
-        self.token_expiration = None
-        self.lock = Lock()
+from dropbox_token_manager import DropboxTokenManager, log_print
 
-    def get_client(self):
-        with self.lock:
-            if self.access_token is None or datetime.now() >= self.token_expiration:
-                self.refresh_access_token()
-            return Dropbox(self.access_token)
+# Initialize Flask app
+app = Flask(__name__)
 
-    def refresh_access_token(self):
-        try:
-            data = {
-                'grant_type': 'refresh_token',
-                'refresh_token': self.refresh_token,
-                'client_id': self.app_key,
-                'client_secret': self.app_secret
-            }
-            response = requests.post('https://api.dropboxapi.com/oauth2/token', data=data)
-            response.raise_for_status()
-            token_info = response.json()
-            
-            self.access_token = token_info['access_token']
-            self.token_expiration = datetime.now() + timedelta(seconds=token_info['expires_in'])
-            log_print("Access token refreshed successfully")
-        except Exception as e:
-            log_print(f"Error refreshing access token: {e}")
-            raise
+# Initialize DropboxTokenManager
+token_manager = None
 
-def get_refresh_token():
-    app_key = os.getenv('DROPBOX_APP_KEY')
-    app_secret = os.getenv('DROPBOX_APP_SECRET')
-    
-    auth_flow = DropboxOAuth2FlowNoRedirect(app_key, app_secret)
-    authorize_url = auth_flow.start()
-    print("1. Go to: " + authorize_url)
-    print("2. Click \"Allow\" (you might have to log in first).")
-    print("3. Copy the authorization code.")
-    auth_code = input("Enter the authorization code here: ").strip()
+def init_token_manager():
+    global token_manager
+    token_manager = DropboxTokenManager()
+    return token_manager
 
-    try:
-        oauth_result = auth_flow.finish(auth_code)
-        print("Refresh token:", oauth_result.refresh_token)
-        return oauth_result.refresh_token
-    except Exception as e:
-        print('Error: %s' % (e,))
-        return None
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
 
-# Usage in your main application
-token_manager = DropboxTokenManager()
+logger = logging.getLogger(__name__)
 
-# Example usage in your QA process
+@app.route('/')
+def home():
+    return "Dropbox QA Service is running."
+
+@app.route('/run-qa')
+def run_qa():
+    result = run_qa_process()
+    return jsonify(result)
+
+@app.route('/webhook', methods=['GET', 'POST'])
+def webhook():
+    log_print(f"Webhook accessed with method: {request.method}")
+    log_print(f"Request args: {request.args}")
+    if request.method == 'GET':
+        challenge = request.args.get('challenge', '')
+        log_print(f"Responding to challenge: {challenge}")
+        return challenge
+    elif request.method == 'POST':
+        log_print("Received webhook notification")
+        log_print(f"Request data: {request.data}")
+        # Trigger QA process in a separate thread
+        Thread(target=run_qa_process).start()
+        return jsonify(success=True)
+
 def run_qa_process():
     log_print("Starting QA process...")
     try:
+        global token_manager
+        if token_manager is None:
+            token_manager = init_token_manager()
         dbx = token_manager.get_client()
         # ... rest of your QA process ...
+        return {"message": "QA process completed successfully"}
     except Exception as e:
         error_msg = f"An error occurred during QA process: {e}"
         log_print(error_msg)
         return {"error": error_msg}
 
-# ... rest of your application code ...
+if __name__ == "__main__":
+    try:
+        log_print("Starting application...")
+        port = int(os.environ.get("PORT", 8080))
+        log_print(f"Using port: {port}")
+        
+        # Initialize and check Dropbox connection
+        token_manager = init_token_manager()
+        try:
+            dbx = token_manager.get_client()
+            dbx.users_get_current_account()
+            log_print("Successfully connected to Dropbox")
+        except Exception as e:
+            log_print(f"Error connecting to Dropbox: {e}")
+        
+        log_print("Initializing Flask app...")
+        app.run(host='0.0.0.0', port=port)
+    except Exception as e:
+        error_msg = f"Error starting the application: {e}\n{traceback.format_exc()}"
+        log_print(error_msg)
+        # Write to a file as a last resort
+        with open('startup_error.log', 'w') as f:
+            f.write(error_msg)
+        sys.exit(1)
