@@ -136,8 +136,13 @@ def run_qa():
 def run_qa_process():
     log_print("Starting QA process...")
     try:
+        log_print("Attempting to get Dropbox client...")
         dbx = token_manager.get_client()
+        log_print("Successfully obtained Dropbox client.")
+        
+        log_print("Listing recent uploads...")
         cut_files = list_recent_uploads(dbx)
+        log_print(f"Found {len(cut_files)} recent uploads.")
         
         if not cut_files:
             log_print("No files to process.")
@@ -145,6 +150,7 @@ def run_qa_process():
         
         results = []
         for entry in cut_files:
+            log_print(f"Processing file: {entry.name}")
             status, qa_result = process_qa(dbx, entry)
             if status is not None and qa_result is not None:
                 results.append({
@@ -152,6 +158,8 @@ def run_qa_process():
                     "status": status,
                     "result": qa_result
                 })
+            else:
+                log_print(f"Failed to process file: {entry.name}")
         
         log_print(f"QA process completed for {len(results)} out of {len(cut_files)} CUT files.")
         return {
@@ -161,6 +169,7 @@ def run_qa_process():
     except Exception as e:
         error_msg = f"An error occurred during QA process: {e}"
         log_print(error_msg)
+        log_print(f"Error details: {traceback.format_exc()}")
         return {"error": error_msg}
 
 @app.route('/webhook', methods=['GET', 'POST'])
