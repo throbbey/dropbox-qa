@@ -3,12 +3,11 @@ import sys
 import traceback
 import dropbox
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import fitz  # PyMuPDF
 from flask import Flask, jsonify, request
 import logging
 from threading import Thread, Lock
-
 from dropbox_token_manager import DropboxTokenManager, log_print
 
 # Initialize Flask app
@@ -27,6 +26,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DOWNLOAD_FOLDER = 'downloads'
+processed_files = set()
+processed_files_lock = Lock()
+
+def list_recent_uploads(dbx):
+    result = dbx.files_list_folder('')
+    sorted_entries = sorted(result.entries, key=lambda entry: entry.server_modified, reverse=True)
+    
+    cut_pdf_files = [
+        entry for entry in sorted_entries 
+        if isinstance(entry, dropbox.files.FileMetadata) 
+        and "CUT" in entry.name.upper() 
+        and entry.name.lower().endswith('.pdf')
+        and entry.name not in processed_files
+    ]
+    
+    return cut_pdf_files
 
 @app.route('/')
 def home():
@@ -136,20 +151,20 @@ def run_qa():
 def run_qa_process():
     log_print("Starting QA process...")
     try:
-        log_print("Attempting to get Dropbox client...")
         dbx = token_manager.get_client()
-        log_print("Successfully obtained Dropbox client.")
-        
-        log_print("Listing recent uploads...")
         cut_files = list_recent_uploads(dbx)
-        log_print(f"Found {len(cut_files)} recent uploads.")
         
         if not cut_files:
-            log_print("No files to process.")
-            return {"message": "No files to process."}
+            log_print("No new files to process.")
+            return {"message": "No new files to process."}
         
         results = []
         for entry in cut_files:
+            with processed_files_lock:
+                if entry.name in processed_files:
+                    continue
+                processed_files.add(entry.name)
+            
             log_print(f"Processing file: {entry.name}")
             status, qa_result = process_qa(dbx, entry)
             if status is not None and qa_result is not None:
@@ -158,12 +173,10 @@ def run_qa_process():
                     "status": status,
                     "result": qa_result
                 })
-            else:
-                log_print(f"Failed to process file: {entry.name}")
         
-        log_print(f"QA process completed for {len(results)} out of {len(cut_files)} CUT files.")
+        log_print(f"QA process completed for {len(results)} new files.")
         return {
-            "message": f"QA process completed for {len(results)} out of {len(cut_files)} CUT files.",
+            "message": f"QA process completed for {len(results)} new files.",
             "results": results
         }
     except Exception as e:
