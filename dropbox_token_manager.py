@@ -17,18 +17,31 @@ class DropboxTokenManager:
         self.access_token = None
         self.token_expiration = None
         self.lock = Lock()
+        self.last_request_time = 0
+        self.min_request_interval = 1  # Minimum 1 second between requests
 
         if not all([self.app_key, self.app_secret, self.refresh_token]):
             raise ValueError("DROPBOX_APP_KEY, DROPBOX_APP_SECRET, and DROPBOX_REFRESH_TOKEN must be set in environment variables")
-        
-        log_print(f"Refresh token length: {len(self.refresh_token)}")
-        log_print(f"Refresh token first 10 characters: {self.refresh_token[:10]}...")
 
     def get_client(self):
         with self.lock:
             if self.access_token is None or self.token_expiration is None or datetime.now() >= self.token_expiration:
                 self.refresh_access_token()
-            return Dropbox(self.access_token)
+            return Dropbox(self.access_token, session=self.rate_limited_session())
+
+    def rate_limited_session(self):
+        class RateLimitedSession(requests.Session):
+            def request(self, *args, **kwargs):
+                current_time = time.time()
+                if current_time - self.last_request_time < self.min_request_interval:
+                    time.sleep(self.min_request_interval - (current_time - self.last_request_time))
+                self.last_request_time = time.time()
+                return super(RateLimitedSession, self).request(*args, **kwargs)
+
+        session = RateLimitedSession()
+        session.last_request_time = self.last_request_time
+        session.min_request_interval = self.min_request_interval
+        return session
 
     def refresh_access_token(self):
         try:
