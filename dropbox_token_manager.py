@@ -13,7 +13,7 @@ class DropboxTokenManager:
         self.app_key = os.getenv('DROPBOX_APP_KEY')
         self.app_secret = os.getenv('DROPBOX_APP_SECRET')
         self.refresh_token = os.getenv('DROPBOX_REFRESH_TOKEN')
-        self.access_token = None
+        self.access_token = os.getenv('DROPBOX_ACCESS_TOKEN')
         self.token_expiration = None
         self.lock = Lock()
 
