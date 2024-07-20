@@ -2,12 +2,13 @@ import os
 import sys
 import traceback
 import dropbox
+from dropbox import DropboxOAuth2Flow
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import fitz  # PyMuPDF
 from flask import Flask, jsonify, request
 import logging
-from threading import Thread
+from threading import Thread, Lock
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,18 +22,46 @@ def log_print(message):
     print(message, flush=True)
     logger.info(message)
 
-APP_KEY = os.getenv('APP_KEY')
-APP_SECRET = os.getenv('APP_SECRET')
-DROPBOX_ACCESS_TOKEN = os.getenv('DROPBOX_ACCESS_TOKEN')
+APP_KEY = os.getenv('DROPBOX_APP_KEY')
+APP_SECRET = os.getenv('DROPBOX_APP_SECRET')
+REFRESH_TOKEN = os.getenv('DROPBOX_REFRESH_TOKEN')
 DOWNLOAD_FOLDER = 'downloads'
 
-if not DROPBOX_ACCESS_TOKEN:
-    raise ValueError("DROPBOX_ACCESS_TOKEN must be set in .env file or environment variables")
+if not all([APP_KEY, APP_SECRET, REFRESH_TOKEN]):
+    raise ValueError("DROPBOX_APP_KEY, DROPBOX_APP_SECRET, and DROPBOX_REFRESH_TOKEN must be set in environment variables")
 
 app = Flask(__name__)
 
-def get_dropbox_client():
-    return dropbox.Dropbox(DROPBOX_ACCESS_TOKEN)
+class DropboxTokenManager:
+    def __init__(self):
+        self.access_token = None
+        self.token_expiration = None
+        self.lock = Lock()
+
+    def get_client(self):
+        with self.lock:
+            if self.access_token is None or datetime.now() >= self.token_expiration:
+                self.refresh_access_token()
+            return dropbox.Dropbox(self.access_token)
+
+    def refresh_access_token(self):
+        try:
+            flow = DropboxOAuth2Flow(
+                APP_KEY,
+                APP_SECRET,
+                'http://localhost:8080',  # This is just a placeholder
+                None,
+                'dropbox-auth-csrf-token'
+            )
+            oauth_result = flow.finish({'refresh_token': REFRESH_TOKEN})
+            self.access_token = oauth_result.access_token
+            self.token_expiration = datetime.now() + timedelta(seconds=oauth_result.expires_in)
+            log_print("Access token refreshed successfully")
+        except Exception as e:
+            log_print(f"Error refreshing access token: {e}")
+            raise
+
+token_manager = DropboxTokenManager()
 
 def list_recent_uploads(dbx):
     result = dbx.files_list_folder('')
@@ -53,89 +82,25 @@ def download_file(dbx, entry):
     
     local_path = os.path.join(DOWNLOAD_FOLDER, entry.name)
     
-    print(f"Downloading {entry.name}...")
+    log_print(f"Downloading {entry.name}...")
     
-    with open(local_path, 'wb') as f:
-        metadata, response = dbx.files_download(entry.path_display)
-        f.write(response.content)
-    
-    print(f"File downloaded successfully to {local_path}")
-    return local_path
-
-def upload_qa_result(dbx, file_path, qa_result, status):
-    file_name = os.path.basename(file_path)
-    qa_file_name = f"{status}{file_name}_qa_result.txt"
-    qa_file_path = os.path.join(DOWNLOAD_FOLDER, qa_file_name)
-    
-    # Create QA result file
-    with open(qa_file_path, 'w') as f:
-        f.write(f"{status}\n")
-        f.write(f"QA Result: {qa_result}\n")
-        f.write(f"Timestamp: {datetime.now().isoformat()}")
-    
-    # Upload QA result file
-    with open(qa_file_path, 'rb') as f:
-        try:
-            dbx.files_upload(f.read(), f"/{qa_file_name}", mode=dropbox.files.WriteMode.overwrite)
-            print(f"QA result uploaded successfully as {qa_file_name}")
-        except Exception as e:
-            print(f"Error uploading QA result: {e}")
-
-
-
-def is_close_to_color(color, target_color, threshold=0.1):
-    if color is None or len(color) != 3:
-        return False
-    distance = sum((a - b) ** 2 for a, b in zip(color, target_color)) ** 0.5
-    return distance < threshold
-
-def is_magenta(color):
-    if color is None or len(color) != 3:
-        return False
-    r, g, b = color
-    return r > 0.5 and b > 0.5 and g < 0.3
-
-def process_qa(dbx, entry):
-    if not entry.name.lower().endswith('.pdf'):
-        print(f"Skipping non-PDF file: {entry.name}")
-        return
-
-    local_path = download_file(dbx, entry)
-    if not local_path:
-        print(f"Failed to download {entry.name}")
-        return
-
     try:
-        document = fitz.open(local_path)
-    except Exception as e:
-        print(f"Error opening PDF file {entry.name}: {e}")
-        return
+        with open(local_path, 'wb') as f:
+            metadata, response = dbx.files_download(entry.path_display)
+            f.write(response.content)
+        
+        log_print(f"File downloaded successfully to {local_path}")
+        return local_path
+    except dropbox.exceptions.ApiError as e:
+        log_print(f"Error downloading file: {e}")
+        return None
 
-    target_color = (0.9260547757148743, 0.0, 0.548302412033081)
-    count = 0
-    for page_num in range(len(document)):
-        page = document.load_page(page_num)
-        for item in page.get_drawings():
-            if 'color' in item and item['color'] is not None:
-                if is_close_to_color(item['color'], target_color) and is_magenta(item['color']):
-                    count += 1
-    document.close()
+# ... [rest of your existing functions] ...
 
-    qa_result = f'{count} instances of magenta lines with vector paths'
-    status = "FAIL" if count == 0 else "PASS"
-    print(f"QA Result for {entry.name}: {status} - {qa_result}")
-    
-    upload_qa_result(dbx, local_path, qa_result, status)
-    return status, qa_result
-
-@app.route('/')
-def home():
-    return "Dropbox QA Service is running."
-    
 def run_qa_process():
     log_print("Starting QA process...")
     try:
-        dbx = get_dropbox_client()
+        dbx = token_manager.get_client()
         cut_files = list_recent_uploads(dbx)
         
         if not cut_files:
@@ -144,13 +109,17 @@ def run_qa_process():
         
         results = []
         for entry in cut_files:
-            status, qa_result = process_qa(dbx, entry)
-            if status is not None and qa_result is not None:
-                results.append({
-                    "filename": entry.name,
-                    "status": status,
-                    "result": qa_result
-                })
+            local_path = download_file(dbx, entry)
+            if local_path:
+                status, qa_result = process_qa(dbx, entry)
+                if status is not None and qa_result is not None:
+                    results.append({
+                        "filename": entry.name,
+                        "status": status,
+                        "result": qa_result
+                    })
+            else:
+                log_print(f"Failed to download {entry.name}")
         
         log_print(f"QA process completed for {len(results)} out of {len(cut_files)} CUT files.")
         return {
@@ -190,7 +159,7 @@ if __name__ == "__main__":
         
         # Check if we can connect to Dropbox
         try:
-            dbx = get_dropbox_client()
+            dbx = token_manager.get_client()
             dbx.users_get_current_account()
             log_print("Successfully connected to Dropbox")
         except Exception as e:
